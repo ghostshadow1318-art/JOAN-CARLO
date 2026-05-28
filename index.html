@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventario Multiproducto - Costo Promedio</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2, h3 { text-align: center; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
+        input, button { width: 100%; padding: 10px; margin: 4px 0; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box; }
+        button { font-weight: bold; cursor: pointer; color: white; border: none; }
+        .btn-scan { background-color: #2196F3; grid-column: span 2; }
+        .btn-entry { background-color: #4CAF50; }
+        .btn-exit { background-color: #F44336; }
+        #reader { width: 100%; max-width: 400px; margin: 10px auto; background: #000; display: none; }
+        
+        /* Estilos de la Tabla */
+        .table-container { overflow-x: auto; margin-top: 25px; }
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #35424a; color: white; }
+        tr:hover { background-color: #f5f5f5; }
+        .text-center { text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Control de Inventario (Precio Promedio Ponderado)</h2>
+    
+    <div class="form-grid">
+        <div>
+            <label><strong>Código del Producto:</strong></label>
+            <input type="text" id="codigo" placeholder="Escribe o escanea un código">
+        </div>
+        <div>
+            <label><strong>Nombre del Producto:</strong></label>
+            <input type="text" id="nombre" placeholder="Ej. Tornillo de 1/2">
+        </div>
+        
+        <button class="btn-scan" onclick="encenderCamara()">📷 Encender Escáner de Cámara</button>
+    </div>
+    
+    <div id="reader"></div>
+
+    <div class="form-grid" style="background: #f9f9f9; padding: 15px; border-radius: 6px; border: 1px solid #e0e0e0;">
+        <div>
+            <label>Cantidad:</label>
+            <input type="number" id="cantidad" placeholder="0" min="1">
+        </div>
+        <div>
+            <label>Costo Unitario ($) <small>(Solo Entradas)</small>:</label>
+            <input type="number" id="precio" placeholder="0.00" min="0" step="0.01">
+        </div>
+        <button class="btn-entry" onclick="procesarTransaccion(true)">📥 Registrar Entrada</button>
+        <button class="btn-exit" onclick="procesarTransaccion(false)">📤 Registrar Salida</button>
+    </div>
+
+    <h3>Fichas de Productos en Existencia</h3>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Producto</th>
+                    <th class="text-center">Stock</th>
+                    <th>Costo Promedio</th>
+                    <th>Valor Total</th>
+                </tr>
+            </thead>
+            <tbody id="tablaProductos">
+                <tr>
+                    <td colspan="5" class="text-center" style="color: #777; padding: 20px;">No hay productos registrados aún. Realiza una entrada para iniciar.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // Base de datos temporal en memoria (Diccionario de objetos)
+    const inventario = {};
+    let html5QrcodeScanner = null;
+
+    function procesarTransaccion(esEntrada) {
+        const codigo = document.getElementById('codigo').value.trim();
+        let nombre = document.getElementById('nombre').value.trim();
+        const cant = parseInt(document.getElementById('cantidad').value);
+
+        // Validaciones iniciales
+        if (!codigo) return alert("El código del producto es obligatorio.");
+        if (isNaN(cant) || cant <= 0) return alert("Ingresa una cantidad válida mayor a cero.");
+
+        // Si el producto no existe en nuestra base de datos, lo creamos
+        if (!inventario[codigo]) {
+            if (!esEntrada) return alert("No puedes registrar una salida de un producto que no existe en el inventario.");
+            if (!nombre) nombre = "Producto Genérico (" + codigo + ")"; // Nombre por defecto si se deja vacío
+            
+            inventario[codigo] = {
+                nombre: nombre,
+                stock: 0,
+                costoTotalInventario: 0.0
+            };
+        }
+
+        const producto = inventario[codigo];
+
+        if (esEntrada) {
+            const precioUnitario = parseFloat(document.getElementById('precio').value);
+            if (isNaN(precioUnitario) || precioUnitario <= 0) return alert("Ingresa un costo unitario válido para la entrada.");
+            
+            // Sumamos valores al lote
+            producto.costoTotalInventario += (cant * precioUnitario);
+            producto.stock += cant;
+        } else {
+            // Manejo de Salidas
+            if (cant > producto.stock) return alert(`Stock insuficiente. Solo quedan ${producto.stock} unidades de este producto.`);
+            
+            const promedioActual = producto.stock === 0 ? 0 : producto.costoTotalInventario / producto.stock;
+            producto.costoTotalInventario -= (cant * promedioActual);
+            producto.stock -= cant;
+        }
+
+        actualizarTabla();
+        limpiarFormulario();
+    }
+
+    function actualizarTabla() {
+        const tbody = document.getElementById('tablaProductos');
+        tbody.innerHTML = ""; // Limpiar filas anteriores
+
+        const codigos = Object.keys(inventario);
+
+        if (codigos.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: #777; padding: 20px;">No hay productos registrados aún.</td></tr>`;
+            return;
+        }
+
+        // Recorrer los productos y renderizar la tabla
+        codigos.forEach(codigo => {
+            const prod = inventario[codigo];
+            const promedio = prod.stock === 0 ? 0 : prod.costoTotalInventario / prod.stock;
+
+            const fila = document.createElement('tr');
+            fila.innerHTML = `
+                <td><code>${codigo}</code></td>
+                <td><strong>${prod.nombre}</strong></td>
+                <td class="text-center">${prod.stock}</td>
+                <td>$${promedio.toFixed(2)}</td>
+                <td>$${prod.costoTotalInventario.toFixed(2)}</td>
+            `;
+            // Al hacer clic en una fila de la tabla, carga automáticamente ese producto en el formulario
+            fila.style.cursor = "pointer";
+            fila.onclick = () => {
+                document.getElementById('codigo').value = codigo;
+                document.getElementById('nombre').value = prod.nombre;
+            };
+
+            tbody.appendChild(fila);
+        });
+    }
+
+    function limpiarFormulario() {
+        document.getElementById('cantidad').value = '';
+        document.getElementById('precio').value = '';
+    }
+
+    // Control del Escáner de Cámara
+    function encenderCamara() {
+        const readerDiv = document.getElementById('reader');
+        readerDiv.style.display = 'block';
+
+        if (!html5QrcodeScanner) {
+            html5QrcodeScanner = new Html5Qrcode("reader");
+        }
+
+        const config = { fps: 10, qrbox: { width: 250, height: 150 } };
+        
+        html5QrcodeScanner.start(
+            { facingMode: "environment" },
+            config,
+            (decodedText) => {
+                document.getElementById('codigo').value = decodedText;
+                
+                // Si el código ya existía en la tabla, rellenamos el nombre automáticamente
+                if (inventario[decodedText]) {
+                    document.getElementById('nombre').value = inventario[decodedText].nombre;
+                } else {
+                    document.getElementById('nombre').value = '';
+                }
+                
+                html5QrcodeScanner.stop();
+                readerDiv.style.display = 'none';
+            },
+            (errorMessage) => { /* Silenciar logs de escaneo continuo */ }
+        ).catch(err => alert("Error de cámara: " + err));
+    }
+</script>
+</body>
+</html>
